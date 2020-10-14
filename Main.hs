@@ -1,4 +1,5 @@
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module Main where
 
@@ -18,6 +19,7 @@ import Text.HTML.Scalpel
   , scrapeURL
   , (@:)
   , text
+  , hasClass
   )
 import Data.Semigroup ((<>))
 
@@ -26,7 +28,7 @@ main :: IO ()
 main = do
     (opts :: Opts) <- execParser optsParser
     case optCommand opts of
-      Search -> scrapeScholars
+      Search id -> scrapeScholars id >>= print
     print $ optCommand opts
         
 data Opts = Opts
@@ -61,7 +63,7 @@ opts = subparser
     <> command "remove" (info (Remove <$> argument str (metavar "ID")) $ progDesc "Removes a paper from the index")
   )
 
-scrapeScholar :: String -> IO (Maybe [String])
+scrapeScholars :: String -> IO (Maybe [String])
 scrapeScholars searchTerm = scrapeURL ("https://scholar.google.com/scholar?q=" <> searchTerm) papers
   where
     papers = chroots ("div" @: [hasClass ".gs_r"]) title
