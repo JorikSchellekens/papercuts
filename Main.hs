@@ -1,5 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE FlexibleInstances #-}
+
 
 module Main where
 
@@ -21,6 +23,17 @@ import Text.HTML.Scalpel
   , text
   , hasClass
   )
+import Data.Aeson
+  ( eitherDecode
+  , encode
+  , FromJSON
+  , (.:)
+  , parseJSON
+  , withObject
+  , fromJSON
+  , withArray
+  )
+import Data.Text (Text)
 import Data.Semigroup ((<>))
 
 
@@ -63,6 +76,24 @@ opts = subparser
     <> command "remove" (info (Remove <$> argument str (metavar "ID")) $ progDesc "Removes a paper from the index")
   )
 
+data Work =
+  Work { titles :: ![Text]
+       , doi :: !Text
+       , workType :: !Text
+       }
+  deriving (Show)
+
+instance FromJSON Work where
+  parseJSON = withObject "Work" $ \v ->
+    Work <$> v .: "title"
+         <*> v .: "DOI"
+         <*> v .: "type"
+
+instance FromJSON ([Work]) where
+  parseJSON = withObject "Works" $ \v ->
+    withArray "itemarray" (\a -> do
+      return fromJSON a :: Work) (v .: "items")
+    
 scrapeScholars :: String -> IO (Maybe [String])
 scrapeScholars searchTerm = scrapeURL ("https://scholar.google.com/scholar?q=" <> searchTerm) papers
   where
