@@ -16,13 +16,6 @@ import Options.Applicative
   , metavar
   , progDesc
   )
-import Text.HTML.Scalpel 
-  ( chroots
-  , scrapeURL
-  , (@:)
-  , text
-  , hasClass
-  )
 import Data.Aeson
   ( eitherDecode
   , encode
@@ -32,6 +25,19 @@ import Data.Aeson
   , withObject
   , fromJSON
   , withArray
+  , decode
+  )
+import Network.HTTP.Conduit
+  ( simpleHttp
+  )
+import Text.Regex.TDFA
+  ( (=~)
+  )
+import Data.ByteString.Lazy.Char8
+  ( toStrict
+  )
+import Data.ByteString
+  ( ByteString
   )
 import Data.Text (Text)
 import Data.Semigroup ((<>))
@@ -39,11 +45,11 @@ import Data.Semigroup ((<>))
 
 main :: IO ()
 main = do
-    (opts :: Opts) <- execParser optsParser
-    case optCommand opts of
-      Search id -> scrapeScholars id >>= print
-    print $ optCommand opts
-        
+  (opts :: Opts) <- execParser optsParser
+  case optCommand opts of
+    Search id -> scrapeCrossRef id 4 >>= print
+  print $ optCommand opts
+
 data Opts = Opts
   { optCommand :: !Command
   }
@@ -58,6 +64,7 @@ data Command
   | Add Id
   | List
   | Remove Id
+  | Sync
   deriving (Show)
 
 optsParser :: ParserInfo Opts
@@ -74,12 +81,13 @@ opts = subparser
     <> command "add" (info (Add <$> argument str (metavar "ID")) (progDesc "Adds the paper to the index"))
     <> command "list" (info (pure List) (progDesc "Lists all paper id's and titles"))
     <> command "remove" (info (Remove <$> argument str (metavar "ID")) $ progDesc "Removes a paper from the index")
+    <> command "sync" (info (pure Sync) (progDesc "Download all papers"))
   )
 
 data Work =
-  Work { titles :: ![Text]
-       , doi :: !Text
-       , workType :: !Text
+  Work { titles :: [Text]
+       , doi :: Text
+       , workType :: Text
        }
   deriving (Show)
 
@@ -89,15 +97,31 @@ instance FromJSON Work where
          <*> v .: "DOI"
          <*> v .: "type"
 
-instance FromJSON ([Work]) where
-  parseJSON = withObject "Works" $ \v ->
-    withArray "itemarray" (\a -> do
-      return fromJSON a :: Work) (v .: "items")
-    
-scrapeScholars :: String -> IO (Maybe [String])
-scrapeScholars searchTerm = scrapeURL ("https://scholar.google.com/scholar?q=" <> searchTerm) papers
-  where
-    papers = chroots ("div" @: [hasClass ".gs_r"]) title
-    title = do
-      t <- text $ "h3"
-      return t
+newtype Result = Result { fromResult :: [Work] }
+  deriving (Show)
+
+instance FromJSON Result where
+  parseJSON = withObject "RESULT" $ \v ->
+    (v .: "message") >>=
+    (.: "items") >>=
+    (\a -> Result <$> (parseJSON a))
+
+scrapeCrossRef :: String -> Int -> IO (Maybe Result)
+scrapeCrossRef searchTerm n = decode <$>
+  (simpleHttp $
+    "https://api.crossref.org/works?query=" <> searchTerm <>
+    "&rows=" <> (show n)
+  )
+
+downloadRegex = "(https:\\/\\/.*)\\?download"
+getSciHubLink' :: String -> IO (ByteString, ByteString, ByteString, [ByteString])
+getSciHubLink' doi = do
+  sciHubResult <- simpleHttp $ "https://sci-hub.do/" <> doi
+  return $ ((=~ (downloadRegex :: ByteString)) . toStrict) sciHubResult
+
+getSciHubLink :: String -> IO ByteString
+getSciHubLink doi = do 
+  tuple <- getSciHubLink' doi
+  let (_,_,_,[res]) = tuple in
+    return res
+

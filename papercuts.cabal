@@ -24,7 +24,9 @@ executable papercuts
                        , optparse-applicative
                        , aeson
                        , text
-                       , scalpel
                        , bytestring
+                       , http-conduit
+                       , base-encoding
+                       , regex-tdfa
   -- hs-source-dirs:
   default-language:    Haskell2010
