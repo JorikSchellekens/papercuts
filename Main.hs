@@ -27,8 +27,14 @@ import Data.Aeson
   , withArray
   , decode
   )
-import Network.HTTP.Conduit
-  ( simpleHttp
+import Network.HTTP.Simple
+  ( httpLBS
+  , parseRequest_
+  , setRequestHeaders
+  , getResponseBody
+  )
+import Network.HTTP.Types.Header
+  ( HeaderName
   )
 import Text.Regex.TDFA
   ( (=~)
@@ -106,22 +112,28 @@ instance FromJSON Result where
     (.: "items") >>=
     (\a -> Result <$> (parseJSON a))
 
+simpleHTTP url = getResponseBody <$> ((httpLBS . parseRequest_) $ url)
+
+simpleHTTPWithHeaders headers url = getResponseBody <$>
+  ((httpLBS . setRequestHeaders headers . parseRequest_) $ url)
+
 scrapeCrossRef :: String -> Int -> IO (Maybe Result)
 scrapeCrossRef searchTerm n = decode <$>
-  (simpleHttp $
+  (simpleHTTP $
     "https://api.crossref.org/works?query=" <> searchTerm <>
     "&rows=" <> (show n)
   )
 
-downloadRegex = "(https:\\/\\/.*)\\?download"
+downloadRegex = "(\\/\\/.*)\\?download"
 getSciHubLink' :: String -> IO (ByteString, ByteString, ByteString, [ByteString])
 getSciHubLink' doi = do
-  sciHubResult <- simpleHttp $ "https://sci-hub.do/" <> doi
+  sciHubResult <- simpleHTTP $ "https://sci-hub.do/" <> doi
   return $ ((=~ (downloadRegex :: ByteString)) . toStrict) sciHubResult
 
 getSciHubLink :: String -> IO ByteString
 getSciHubLink doi = do 
   tuple <- getSciHubLink' doi
   let (_,_,_,[res]) = tuple in
-    return res
+    return $ "https:" <> res
 
+getBibtex doi = simpleHTTPWithHeaders [("Accept", "application/x-bibtex")] $ "http://dx.doi.org/" <> doi
