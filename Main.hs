@@ -45,6 +45,9 @@ import Data.ByteString.Lazy.Char8
 import Data.ByteString
   ( ByteString
   )
+import Data.ByteString.UTF8
+  ( toString
+  )
 import Data.Text (Text)
 import Data.Semigroup ((<>))
 
@@ -53,7 +56,9 @@ main :: IO ()
 main = do
   (opts :: Opts) <- execParser optsParser
   case optCommand opts of
-    Search id -> scrapeCrossRef id 4 >>= print
+    Search str -> scrapeCrossRef str 4 >>= print
+    Info id -> getBibtex id >>= print
+    Open id -> getPDFFromSciHub id >>= print
   print $ optCommand opts
 
 data Opts = Opts
@@ -135,5 +140,7 @@ getSciHubLink doi = do
   tuple <- getSciHubLink' doi
   let (_,_,_,[res]) = tuple in
     return $ "https:" <> res
+
+getPDFFromSciHub doi = (toString <$> getSciHubLink doi) >>= simpleHTTP
 
 getBibtex doi = simpleHTTPWithHeaders [("Accept", "application/x-bibtex")] $ "http://dx.doi.org/" <> doi
