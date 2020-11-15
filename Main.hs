@@ -1,6 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE BangPatterns #-}
 
 module Main where
 
@@ -44,6 +45,9 @@ import Data.ByteString.Lazy.Char8
 import Data.ByteString
   ( ByteString
   )
+import qualified Data.ByteString.Lazy as BL
+  ( writeFile
+  )
 import qualified Data.ByteString.Lazy.UTF8 as LB8
   ( toString
   )
@@ -53,9 +57,7 @@ import Data.ByteString.UTF8
 import System.Directory
   ( getCurrentDirectory
   , getDirectoryContents
-  )
-import System.IO
-  ( writeFile
+  , createDirectoryIfMissing
   )
 import System.FilePath
   ( (</>)
@@ -71,6 +73,7 @@ import qualified Text.BibTeX.Format as BibFormat
   )
 import Text.BibTeX.Entry
   ( T
+  , fields
   )
 import Text.Parsec
   ( parse
@@ -86,6 +89,16 @@ import Data.Text
   (Text
   , unpack
   )
+import System.IO
+  ( writeFile
+  )
+import qualified Data.ByteString.Lazy.Char8 as C8
+  ( unpack
+  )
+import Data.Char
+  ( toLower
+  , isAlphaNum
+  )
 import Data.Semigroup ((<>))
 
 main :: IO ()
@@ -95,7 +108,10 @@ main = do
     Search str -> search str 4 >>= putStr
     Info id -> getBibtex id >>= print
     Add id -> add id
-    Open id -> getPDFFromSciHub id >>= print
+    Init -> initialise >> putStr "Papercuts repo initialised"
+    Sync -> sync
+    List -> list
+    Remove id -> remove id
 
 data Opts = Opts
   { optCommand :: !Command
@@ -106,7 +122,6 @@ type Id = String
 data Command
   = Init
   | Search Id
-  | Open Id
   | Info Id
   | Add Id
   | List
@@ -115,7 +130,7 @@ data Command
   deriving (Show)
 
 optsParser :: ParserInfo Opts
-optsParser = info (programOptions) (progDesc "Description")
+optsParser = info (programOptions) (progDesc "Knowledge at your fingertips")
 
 programOptions = Opts <$> opts
 
@@ -123,7 +138,6 @@ opts = subparser
   (
     command "init" (info (pure Init) (progDesc "Initialize a papers index"))
     <> command "search" (info (Search <$> argument str (metavar "SEARCH")) (progDesc "Searches crossref.org for papers"))
-    <> command "open" (info (Open <$> argument str (metavar "ID")) (progDesc "Opens the paper as a pdf"))
     <> command "info" (info (Info <$> argument str (metavar "ID")) (progDesc "Gets paper bibtex info from doi.org"))
     <> command "add" (info (Add <$> argument str (metavar "ID")) (progDesc "Adds the paper to the index"))
     <> command "list" (info (pure List) (progDesc "Lists all paper id's and titles"))
@@ -208,10 +222,10 @@ bibtexLocation' currentDir =
 bibtexLocation :: IO (FilePath)
 bibtexLocation = getCurrentDirectory >>= bibtexLocation'
 
-init :: IO (FilePath)
-init = do
+initialise :: IO (FilePath)
+initialise = do
   currentDir <- getCurrentDirectory
-  writeFile (currentDir </> bibFile) ""
+  BL.writeFile (currentDir </> bibFile) ""
   return $ currentDir </> bibFile
 
 parseBibFile :: FilePath -> IO (Either ParseError [T])
@@ -227,4 +241,53 @@ add doi = do
   case parseResult of
     Right entries -> writeFile bibLoc $ unlines . (BibFormat.entry <$>) $ newEntry : entries
     Left e -> error "Couldn't parse bib file"
+  downloadPDF bibLoc doi $ bibVal "title" newEntry
+
+pdfDir :: FilePath
+pdfDir = "papers"
+
+ensurePdfDir :: FilePath -> IO FilePath 
+ensurePdfDir bibLoc = do
+  createDirectoryIfMissing False loc
+  return loc
+  where loc = (takeDirectory bibLoc) </> pdfDir
+
+downloadPDF :: FilePath -> Id -> String -> IO ()
+downloadPDF bibLoc doi name = do
+  pdfLoc <- ensurePdfDir bibLoc
+  pdf <- (getPDFFromSciHub doi)
+  BL.writeFile (pdfLoc </> (name <> ".pdf")) pdf
+
+alphaNumFilter = filter (isAlphaNum . toLower)
+
+bibVal :: String -> T -> String
+bibVal key entry = snd . head $ filter (\(k, val) -> k == key) $ fields entry
+
+sync :: IO ()
+sync = do
+  bibLoc <- bibtexLocation
+  pdfLoc <- ensurePdfDir bibLoc
+  bibParse <- parseBibFile bibLoc
+  let pendingDownloads = ((\f -> downloadPDF bibLoc (bibVal "doi" f) (bibVal "title" f)) <$>) <$> bibParse
+  sequence . (sequence <$>) $ pendingDownloads
+  pure ()
+
+list :: IO ()
+list = do
+  bibLoc <- bibtexLocation
+  bibParse <- parseBibFile bibLoc
+  let pendingDownloads = ((\f -> print $ (bibVal "doi" f) <> " " <> (bibVal "title" f)) <$>) <$> bibParse
+  sequence . (sequence <$>) $ pendingDownloads
+  pure ()
+
+remove :: String -> IO ()
+remove doi = do
+  bibLoc <- bibtexLocation
+  parseResult <- parseBibFile bibLoc
+  -- Need strict here or the thunk will cause a race condition on the two
+  -- instances of the open file
+  let !filtered = case parseResult of
+                      Right entries ->  filter (\f -> bibVal "doi" f /= doi) entries
+                      Left e -> error "Couldn't parse bib file"
+  writeFile bibLoc $ unlines . (BibFormat.entry <$>) $ filtered
 
